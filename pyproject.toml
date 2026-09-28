@@ -1,16 +1,19 @@
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
-[project]
+[tool.poetry]
 name = "whatsapp-music-bot"
 version = "0.1.0"
 description = "A WhatsApp Web-based music bot."
-requires-python = ">=3.14.7"
-dependencies = [
-    "python-dotenv",
-    "whatsapp-python",
-    "pytest",
-    "google-generativeai",
-    "supabase"
-]
+authors = ["Author <author@example.com>"]
+
+[tool.poetry.dependencies]
+python = ">=3.14.7,<4.0"
+playwright = "^1.63.0"
+python-dotenv = "^1.2.3"
+whatsapp-python = "^4.3.0"
+pytest = "^9.1.1"
+google-generativeai = "^0.8.6"
+supabase = "^2.31.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
