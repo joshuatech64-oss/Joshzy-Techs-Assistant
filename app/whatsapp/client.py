@@ -53,7 +53,7 @@ class WhatsAppClient:
             try:
                 self.context = await self.playwright.chromium.launch_persistent_context(
                     user_data_dir=self.profile_path,
-                    headless=False,  # Needs to be visible for QR scanning initially
+                    headless=True,  # Needs to be visible for QR scanning initially
                     args=["--no-sandbox", "--disable-setuid-sandbox"]
                 )
             except Exception as launch_err:
@@ -62,7 +62,7 @@ class WhatsAppClient:
                     self._cleanup_stale_locks()
                     self.context = await self.playwright.chromium.launch_persistent_context(
                         user_data_dir=self.profile_path,
-                        headless=False,
+                        headless=True,
                         args=["--no-sandbox", "--disable-setuid-sandbox"]
                     )
                 else:
