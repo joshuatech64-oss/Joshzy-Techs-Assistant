@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+data/
+sessions/
+.pytest_cache/
+test_sessions/

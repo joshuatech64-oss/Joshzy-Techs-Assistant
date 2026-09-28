@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whatsapp-music-bot"
+version = "0.1.0"
+description = "A WhatsApp Web-based music bot."
+requires-python = ">=3.14.7"
+dependencies = [
+    "python-dotenv",
+    "whatsapp-python",
+    "pytest",
+    "google-generativeai",
+    "supabase"
+]
