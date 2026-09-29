@@ -62,6 +62,7 @@ class WhatsAppClient:
                 self.context = await self.playwright.chromium.launch_persistent_context(
                     user_data_dir=self.profile_path,
                     headless=is_headless,
+                    channel="chromium",
                     args=browser_args
                 )
             except Exception as launch_err:
@@ -71,6 +72,7 @@ class WhatsAppClient:
                     self.context = await self.playwright.chromium.launch_persistent_context(
                         user_data_dir=self.profile_path,
                         headless=is_headless,
+                        channel="chromium",
                         args=browser_args
                     )
                 else:
