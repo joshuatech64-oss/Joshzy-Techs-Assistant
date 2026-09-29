@@ -116,7 +116,7 @@ class WhatsAppClient:
                 logger.info("WhatsApp Web loaded. If QR code is present, please scan it.")
                 
                 # Wait specifically for the chat list which means we are logged in
-                await self.page.wait_for_selector('div#pane-side', timeout=0)
+                await self.page.wait_for_selector('div#pane-side', timeout=5000)
                 logger.info("Successfully authenticated to WhatsApp Web!")
             except Exception as e:
                 logger.error(f"Timeout waiting for WhatsApp Web to load or authenticate: {e}")
