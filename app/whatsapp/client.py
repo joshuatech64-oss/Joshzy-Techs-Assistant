@@ -112,7 +112,7 @@ class WhatsAppClient:
             
             # Wait for either QR code or chat list
             try:
-                await self.page.wait_for_selector('canvas, div#pane-side', timeout=60000)
+                await self.page.wait_for_selector('canvas, div#pane-side', timeout=5000)
                 logger.info("WhatsApp Web loaded. If QR code is present, please scan it.")
                 
                 # Wait specifically for the chat list which means we are logged in
