@@ -62,6 +62,7 @@ class WhatsAppClient:
                 self.context = await self.playwright.chromium.launch_persistent_context(
                     user_data_dir=self.profile_path,
                     headless=is_headless,
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
                     channel="chromium",
                     args=browser_args
                 )
@@ -72,6 +73,7 @@ class WhatsAppClient:
                     self.context = await self.playwright.chromium.launch_persistent_context(
                         user_data_dir=self.profile_path,
                         headless=is_headless,
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
                         channel="chromium",
                         args=browser_args
                     )
@@ -84,7 +86,7 @@ class WhatsAppClient:
             self.page = pages[0] if pages else await self.context.new_page()
             
             # Spoof visibility so WhatsApp Web never thinks the tab is hidden or backgrounded
-            await self.page.add_init_script("Object.defineProperty(document, 'visibilityState', {get: () => 'visible'}); Object.defineProperty(document, 'hidden', {get: () => false});")
+            await self.page.add_init_script("Object.defineProperty(document, 'visibilityState', {get: () => 'visible'}); Object.defineProperty(document, 'hidden', {get: () => false}); Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
             
             logger.info("Browser context created...")
 
@@ -459,3 +461,7 @@ class WhatsAppClient:
             asyncio.run(self.start_async())
         except KeyboardInterrupt:
             logger.info("WhatsApp client stopped.")
+
+
+
+
