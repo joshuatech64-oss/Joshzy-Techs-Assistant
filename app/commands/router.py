@@ -18,6 +18,7 @@ class CommandRouter:
             ".spotify": self.cmd_spotify,
             ".translate": self.cmd_translate,
             ".mute": self.cmd_mute,
+            ".unmute": self.cmd_unmute,
         }
 
     def process_message(self, sender_id: str, chat_id: str, is_group: bool, message: str, quoted_text: str = None, row_testid: str = None):
@@ -131,3 +132,29 @@ class CommandRouter:
 
         self.mute_manager.mute(chat_id, target, duration_seconds)
         self.wa_client.send_message(chat_id, f"✅ @{target} has been muted for {duration_str}.")
+
+    def cmd_unmute(self, sender_id: str, chat_id: str, is_group: bool, message: str, quoted_text: str = None):
+        if not is_group:
+            self.wa_client.send_message(chat_id, "❌ .unmute can only be used in a WhatsApp group.")
+            return
+
+        parts = message.split()
+        if len(parts) != 2 or not parts[1].startswith("@"):
+            self.wa_client.send_message(chat_id, "Usage: .unmute @username\nExample: .unmute @john")
+            return
+
+        target = parts[1][1:] # remove @
+
+        # Check admin
+        if not self.wa_client.is_admin(chat_id, sender_id):
+            self.wa_client.send_message(chat_id, "❌ You must be a group admin to use .unmute.")
+            return
+
+        if not self.wa_client.is_admin(chat_id, "bot"):
+            self.wa_client.send_message(chat_id, "❌ Bot must be a group admin to unmute.")
+            return
+
+        if self.mute_manager.unmute(chat_id, target):
+            self.wa_client.send_message(chat_id, f"✅ @{target} has been unmuted.")
+        else:
+            self.wa_client.send_message(chat_id, f"ℹ️ @{target} is not currently muted.")

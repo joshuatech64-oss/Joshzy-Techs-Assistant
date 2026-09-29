@@ -49,12 +49,20 @@ class WhatsAppClient:
             return
 
         try:
+            is_headless = os.getenv("HEADLESS", "false").lower() == "true"
             logger.info("Launching browser...")
+            browser_args = [
+                "--no-sandbox", 
+                "--disable-setuid-sandbox",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding"
+            ]
             try:
                 self.context = await self.playwright.chromium.launch_persistent_context(
                     user_data_dir=self.profile_path,
-                    headless=True,  # Needs to be visible for QR scanning initially
-                    args=["--no-sandbox", "--disable-setuid-sandbox"]
+                    headless=is_headless,
+                    args=browser_args
                 )
             except Exception as launch_err:
                 if "ProcessSingleton" in str(launch_err):
@@ -62,8 +70,8 @@ class WhatsAppClient:
                     self._cleanup_stale_locks()
                     self.context = await self.playwright.chromium.launch_persistent_context(
                         user_data_dir=self.profile_path,
-                        headless=True,
-                        args=["--no-sandbox", "--disable-setuid-sandbox"]
+                        headless=is_headless,
+                        args=browser_args
                     )
                 else:
                     raise launch_err
@@ -72,6 +80,10 @@ class WhatsAppClient:
             logger.info("Creating browser context...")
             pages = self.context.pages
             self.page = pages[0] if pages else await self.context.new_page()
+            
+            # Spoof visibility so WhatsApp Web never thinks the tab is hidden or backgrounded
+            await self.page.add_init_script("Object.defineProperty(document, 'visibilityState', {get: () => 'visible'}); Object.defineProperty(document, 'hidden', {get: () => false});")
+            
             logger.info("Browser context created...")
 
             logger.info(f"DIAGNOSTIC (Pre-goto): context_alive={self.context is not None}, page_alive={self.page is not None}")
@@ -136,13 +148,16 @@ class WhatsAppClient:
             window.processedIds = window.processedIds || new Set();
             const processedIds = window.processedIds;
             
+            // Mark all existing messages present at startup so they are not processed as new
+            document.querySelectorAll('#main [data-testid^="conv-msg-"]').forEach(el => {
+                let msgId = el.getAttribute('data-id');
+                if (msgId) {
+                    processedIds.add(msgId);
+                }
+            });
+            
             const observer = new MutationObserver((mutations) => {
-                let batchLogged = false;
                 for (let mutation of mutations) {
-                    if (!batchLogged) {
-                        window.pythonMessageHandler({log: "DOM mutation received"});
-                        batchLogged = true;
-                    }
                     for (let node of mutation.addedNodes) {
                         try {
                             let targetSpans = new Set();
@@ -170,119 +185,109 @@ class WhatsAppClient:
                             
                             for (let span of targetSpans) {
                                 let text = span.innerText || "";
-                                    text = text.trim();
+                                text = text.trim();
+                                
+                                if (text.length > 0) {
+                                    let lText = text.toLowerCase();
                                     
-                                    if (text.length > 0) {
-                                        let lText = text.toLowerCase();
-                                        
-                                        let chatListAncestor = span.closest('[role="grid"][aria-label="Chat list"]') || span.closest('[role="row"][data-testid^="list-item-"]') || span.closest('[aria-label="Chat list"]');
-                                        if (chatListAncestor) {
-                                            // Handle chat-list preview specifically: open the row but DO NOT send to router
-                                            // Filter out generic chat list noise so we don't open rows for random UI updates
-                                            if (/^\d{1,2}:\d{2}(?:\s?[AP]M)?$/i.test(text)) continue;
-                                            if (lText.includes('typing…') || lText.includes('unread message') || lText === '1') continue;
-                                            if (lText.includes('end-to-end encrypted') || lText.includes('learn more')) continue;
-                                            
-                                            let rowAncestor = span.closest('[role="row"]');
-                                            if (rowAncestor) {
-                                                let rowTestId = rowAncestor.getAttribute('data-testid');
-                                                if (rowTestId) {
-                                                    // Synchronous deduplication for clicks
-                                                    let clickId = "click_" + rowTestId + "_" + text.substring(0, 30);
-                                                    if (processedIds.has(clickId)) {
-                                                        continue;
-                                                    }
-                                                    processedIds.add(clickId);
-                                                    if (processedIds.size > 1000) processedIds.clear();
-                                                    
-                                                    window.pythonMessageHandler({log: "Opening chat list row from preview: " + rowTestId});
-                                                    window.pythonMessageHandler({row_testid: rowTestId, text: ""});
-                                                }
-                                            }
-                                            continue; // Skip normal message processing for sidebar elements
-                                        }
-
-                                        // 1. Must be in the open conversation
-                                        if (!span.closest('#main')) continue;
-                                        
-                                        // 2. Must be the actual message text element
-                                        if (span.getAttribute('data-testid') !== 'selectable-text') continue;
-                                        
-                                        // 4. Filter out timestamps and system text from inside the main pane
-                                        if (/^\d{1,2}:\d{2}(?:\s?[AP]M)?$/i.test(text)) continue;
-                                        if (lText.includes('end-to-end encrypted') || lText.includes('learn more')) continue;
-
-                                        // Synchronous deduplication
-                                        let msgWrapper = span.closest('[data-testid^="conv-msg-"]');
-                                        if (!msgWrapper) continue;
-                                        
-                                        let msgId = msgWrapper.getAttribute('data-testid') || msgWrapper.getAttribute('data-id');
-                                        if (!msgId) continue;
-                                        
-                                        if (processedIds.has(msgId)) {
-                                            continue;
-                                        }
-                                        processedIds.add(msgId);
-                                        if (processedIds.size > 1000) processedIds.clear();
-
-                                        let current = span.parentElement;
-                                        let container = null;
-                                        
-                                        while (current) {
-                                            if (current.getAttribute && current.getAttribute('role') === 'row') {
-                                                container = current;
-                                                break;
-                                            }
-                                            current = current.parentElement;
-                                        }
-                                        
-                                        if (container) {
-                                            window.pythonMessageHandler({log: "incoming message detected"});
-                                            window.pythonMessageHandler({log: "extracted text: " + text.substring(0, 30)});
-                                            
-                                            // Extract sender info
-                                            let senderId = "Unknown Sender";
-                                            let senderEl = container.closest('div[role="row"]')?.querySelector('div.copyable-text[data-pre-plain-text]') || container.querySelector('div.copyable-text[data-pre-plain-text]');
-                                            if (senderEl) {
-                                                let preText = senderEl.getAttribute('data-pre-plain-text');
-                                                if (preText) {
-                                                    let parts = preText.split('] ');
-                                                    if (parts.length > 1) {
-                                                        senderId = parts[1].replace(':', '').trim();
-                                                    }
-                                                }
-                                            }
-                                            let rowTestId = container.getAttribute('data-testid') || '';
-                                            
-                                            // Wait briefly for the UI to settle before routing
-                                            setTimeout(() => {
-                                                    let isGroup = false;
-                                                    let chatTitle = "Unknown Chat";
-                                                    let chatTitleEl = document.querySelector('header span[title][dir="auto"]');
-                                                    if (chatTitleEl) {
-                                                        chatTitle = chatTitleEl.getAttribute('title');
-                                                    }
-
-                                                    let quotedText = "";
-                                                    let quotedEl = container.querySelector('.quoted-mention') || container.querySelector('span.quoted-mention') || container.querySelector('[data-testid="quoted-message"]');
-                                                    if (quotedEl) {
-                                                        quotedText = quotedEl.innerText || quotedEl.textContent || "";
-                                                    }
-
-                                                    window.pythonMessageHandler({log: "sent to handler"});
-                                                    
-                                                    window.pythonMessageHandler({
-                                                        sender: senderId,
-                                                        chat_id: chatTitle,
-                                                        is_group: isGroup,
-                                                        text: text,
-                                                        quoted_text: quotedText.trim(),
-                                                        row_testid: rowTestId
-                                                    });
-                                                }, 500);
+                                    let chatListAncestor = span.closest('[data-testid^="list-item-"]');
+                                    let mainAncestor = span.closest('#main');
+                                    
+                                    if (chatListAncestor && !mainAncestor) {
+                                        // Sidebar preview trigger
+                                        let rowTestId = chatListAncestor.getAttribute('data-testid');
+                                        if (rowTestId) {
+                                            // Deduplicate the preview trigger using the text + row id
+                                            let previewId = "preview_" + rowTestId + "_" + btoa(unescape(encodeURIComponent(text.substring(0, 50))));
+                                            if (!processedIds.has(previewId)) {
+                                                processedIds.add(previewId);
+                                                window.pythonMessageHandler({
+                                                    row_testid: rowTestId,
+                                                    text: "" // Empty text ensures router ignores this as a final message
+                                                });
+                                                if (processedIds.size > 1000) processedIds.clear();
                                             }
                                         }
+                                        continue; 
                                     }
+
+                                    if (!mainAncestor) continue;
+                                    if (span.getAttribute('data-testid') !== 'selectable-text') continue;
+                                    
+                                    if (/^\d{1,2}:\d{2}(?:\s?[AP]M)?$/i.test(text)) continue;
+                                    if (lText.includes('end-to-end encrypted') || lText.includes('learn more')) continue;
+
+                                    let msgWrapper = span.closest('[data-testid^="conv-msg-"]');
+                                    if (!msgWrapper) continue;
+                                    
+                                    let msgId = msgWrapper.getAttribute('data-id');
+                                    if (!msgId) continue;
+
+                                    // 2. Strict self-message filter
+                                    // Incoming messages lack read-receipt status ticks and use 'message-in'.
+                                    // Outgoing messages use 'message-out' and contain delivery ticks (msg-check, msg-dblcheck).
+                                    if (msgId.includes('true_')) continue; // Legacy fallback
+                                    if (span.closest('.message-out') || msgWrapper.querySelector('.message-out') || msgWrapper.classList.contains('message-out')) continue;
+                                    if (msgWrapper.querySelector('[data-testid="msg-dblcheck"]') || msgWrapper.querySelector('[data-testid="msg-check"]')) continue;
+                                    
+                                    // 3. Strict synchronous deduplication
+                                    if (msgWrapper.getAttribute('data-joshzy-processed') === msgId) continue;
+                                    if (processedIds.has(msgId)) continue;
+                                    
+                                    processedIds.add(msgId);
+                                    msgWrapper.setAttribute('data-joshzy-processed', msgId);
+                                    if (processedIds.size > 1000) processedIds.clear();
+
+
+
+                                    let current = span.parentElement;
+                                    let container = null;
+                                    
+                                    while (current) {
+                                        if (current.getAttribute && current.getAttribute('role') === 'row') {
+                                            container = current;
+                                            break;
+                                        }
+                                        current = current.parentElement;
+                                    }
+                                    
+                                    if (container) {
+                                        let senderId = "Unknown Sender";
+                                        let senderEl = container.closest('div[role="row"]')?.querySelector('div.copyable-text[data-pre-plain-text]') || container.querySelector('div.copyable-text[data-pre-plain-text]');
+                                        if (senderEl) {
+                                            let preText = senderEl.getAttribute('data-pre-plain-text');
+                                            if (preText) {
+                                                let parts = preText.split('] ');
+                                                if (parts.length > 1) {
+                                                    senderId = parts[1].replace(':', '').trim();
+                                                }
+                                            }
+                                        }
+                                        
+                                        let isGroup = false;
+                                        let chatTitle = "Unknown Chat";
+                                        let chatTitleEl = document.querySelector('#main header [data-testid="conversation-info-header-chat-title"]');
+                                        if (chatTitleEl) {
+                                            chatTitle = chatTitleEl.textContent || chatTitleEl.innerText;
+                                        }
+
+                                        let quotedText = "";
+                                        let quotedEl = container.querySelector('.quoted-mention') || container.querySelector('span.quoted-mention') || container.querySelector('[data-testid="quoted-message"]');
+                                        if (quotedEl) {
+                                            quotedText = quotedEl.innerText || quotedEl.textContent || "";
+                                        }
+                                        
+                                        window.pythonMessageHandler({
+                                            sender: senderId,
+                                            chat_id: chatTitle,
+                                            is_group: isGroup,
+                                            text: text,
+                                            quoted_text: quotedText.trim(),
+                                            row_testid: "" 
+                                        });
+                                    }
+                                }
+                            }
                             } catch (err) {
                                 window.pythonMessageHandler({error: err.toString()});
                             }
@@ -293,7 +298,7 @@ class WhatsAppClient:
             let target = document.body;
             window.pythonMessageHandler({log: "Observer target exists: " + (!!target).toString()});
             
-            observer.observe(target, { childList: true, subtree: true });
+            observer.observe(target, { childList: true, subtree: true, characterData: true, characterDataOldValue: true });
             window.pythonMessageHandler({log: "MutationObserver installed"});
             
             // Harmless DOM test
@@ -372,7 +377,7 @@ class WhatsAppClient:
     async def open_chat_row(self, row_testid: str):
         try:
             row = self.page.locator(f'[role="row"][data-testid="{row_testid}"]').first
-            await row.click()
+            await row.click(force=True)
             await self.page.wait_for_timeout(500)
             
             # Baseline all existing visible messages so we don't route history

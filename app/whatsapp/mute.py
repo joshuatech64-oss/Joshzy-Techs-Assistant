@@ -17,3 +17,10 @@ class MuteManager:
             else:
                 del self.mutes[key]
         return False
+
+    def unmute(self, chat_id: str, target_user: str) -> bool:
+        key = (chat_id, target_user)
+        if key in self.mutes:
+            del self.mutes[key]
+            return True
+        return False
