@@ -97,6 +97,31 @@ class WhatsAppClient:
             try:
                 await self.page.goto("https://web.whatsapp.com/")
                 logger.info("WhatsApp Web navigation completed...")
+                
+                try:
+                    logger.info(f"Current page URL: {self.page.url}")
+                    page_title = await self.page.title()
+                    logger.info(f"Page title: {page_title}")
+                    body_text = await self.page.locator("body").inner_text()
+                    logger.info(f"First 1000 characters of body: {body_text[:1000]}")
+                    app_exists = await self.page.locator("#app").count() > 0
+                    logger.info(f"Whether #app exists: {app_exists}")
+                    testid_count = await self.page.locator("[data-testid]").count()
+                    logger.info(f"Whether any [data-testid] elements exist: {testid_count > 0}")
+                    if testid_count > 0:
+                        testids = await self.page.evaluate('''() => {
+                            let ids = new Set();
+                            document.querySelectorAll("[data-testid]").forEach(el => ids.add(el.getAttribute("data-testid")));
+                            return Array.from(ids).slice(0, 30);
+                        }''')
+                        logger.info(f"The first 30 unique [data-testid] values currently present: {testids}")
+                    canvas_exists = await self.page.locator("canvas").count() > 0
+                    logger.info(f"Whether canvas exists: {canvas_exists}")
+                    pane_side_exists = await self.page.locator("#pane-side").count() > 0
+                    logger.info(f"Whether #pane-side exists: {pane_side_exists}")
+                except Exception as diag_err:
+                    logger.error(f"Diagnostic logging failed: {diag_err}")
+                    
             except Exception as goto_err:
                 logger.error(f"DIAGNOSTIC (Goto Error/Timeout): {goto_err}")
                 if self.page:
