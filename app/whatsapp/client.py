@@ -1,7 +1,10 @@
 import logging
 import asyncio
 import os
+import shutil
+import zipfile
 from typing import Callable
+from app.database.db import Database
 try:
     from playwright.async_api import async_playwright, Page, BrowserContext
 except ImportError:
@@ -39,6 +42,53 @@ class WhatsAppClient:
                 except Exception as e:
                     logger.error(f"Failed to remove lock file {lock}: {e}")
 
+    def _restore_session_from_supabase(self):
+        try:
+            db = Database()
+            if not db.client: return
+            res = db.client.storage.from_("whatsapp-sessions").list()
+            if any(f['name'] == "session.zip" for f in res):
+                logger.info("Found saved session in Supabase. Restoring...")
+                temp_zip = "whatsapp_session.zip"
+                with open(temp_zip, "wb") as f:
+                    f.write(db.client.storage.from_("whatsapp-sessions").download("session.zip"))
+                if os.path.exists(self.profile_path):
+                    shutil.rmtree(self.profile_path, ignore_errors=True)
+                os.makedirs(self.profile_path, exist_ok=True)
+                with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
+                    zip_ref.extractall(self.profile_path)
+                os.remove(temp_zip)
+                logger.info("Session restored successfully from Supabase.")
+        except Exception as e:
+            logger.error(f"Failed to restore session from Supabase: {e}")
+
+    def _save_session_to_supabase(self):
+        try:
+            db = Database()
+            if not db.client: return
+            logger.info("Saving session state to Supabase...")
+            temp_zip = "whatsapp_session.zip"
+            with zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, _, files in os.walk(self.profile_path):
+                    if 'Cache' in root or 'Code Cache' in root:
+                        continue
+                    for file in files:
+                        if file in ["lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket"]:
+                            continue
+                        file_path = os.path.join(root, file)
+                        try:
+                            zipf.write(file_path, os.path.relpath(file_path, self.profile_path))
+                        except Exception:
+                            pass
+            
+            with open(temp_zip, "rb") as f:
+                # Upsert to overwrite existing session
+                db.client.storage.from_("whatsapp-sessions").upload("session.zip", f, file_options={"upsert": "true"})
+            os.remove(temp_zip)
+            logger.info("Session successfully saved to Supabase.")
+        except Exception as e:
+            logger.error(f"Failed to save session to Supabase: {e}")
+
     async def start_async(self):
         self._loop = asyncio.get_running_loop()
         logger.info("Starting WhatsApp client via Playwright...")
@@ -69,6 +119,9 @@ class WhatsAppClient:
                     "--mute-audio",
                     "--js-flags=--max-old-space-size=256"
                 ])
+                # Restore persisted session from Supabase before launching browser
+                self._restore_session_from_supabase()
+                
             try:
                 self.context = await self.playwright.chromium.launch_persistent_context(
                     user_data_dir=self.profile_path,
@@ -154,12 +207,21 @@ class WhatsAppClient:
             try:
                 await self.page.wait_for_selector('canvas, div#pane-side', timeout=5000)
                 logger.info("WhatsApp Web loaded. If QR code is present, please scan it.")
-                
-                # Wait specifically for the chat list which means we are logged in
-                await self.page.wait_for_selector('div#pane-side', timeout=5000)
-                logger.info("Successfully authenticated to WhatsApp Web!")
             except Exception as e:
-                logger.error(f"Timeout waiting for WhatsApp Web to load or authenticate: {e}")
+                logger.error(f"Initial 5s wait for WhatsApp Web to load timed out: {e}")
+                
+            async def _wait_for_auth_and_save():
+                try:
+                    await self.page.wait_for_selector('div#pane-side', timeout=0)
+                    logger.info("Successfully authenticated to WhatsApp Web! (Background detected)")
+                    if is_headless:
+                        # Yield to event loop to ensure DOM stabilizes before zipping
+                        await asyncio.sleep(5)
+                    self._save_session_to_supabase()
+                except Exception as ex:
+                    logger.error(f"Background auth detection failed: {ex}")
+            
+            asyncio.create_task(_wait_for_auth_and_save())
                 
             # Listen to incoming messages via DOM MutationObserver
             await self.page.expose_function("pythonMessageHandler", self._handle_js_message)
