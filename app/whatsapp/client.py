@@ -58,6 +58,17 @@ class WhatsAppClient:
                 "--disable-backgrounding-occluded-windows",
                 "--disable-renderer-backgrounding"
             ]
+            
+            if is_headless:
+                browser_args.extend([
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--no-zygote",
+                    "--disable-software-rasterizer",
+                    "--disable-extensions",
+                    "--mute-audio",
+                    "--js-flags=--max-old-space-size=256"
+                ])
             try:
                 self.context = await self.playwright.chromium.launch_persistent_context(
                     user_data_dir=self.profile_path,
