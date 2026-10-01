@@ -44,7 +44,7 @@ def test_database_health(db):
     assert db.ping() is True
 
 def test_command_routing_ping(router, wa_client):
-    router.process_message("user123", "chat123", False, ".ping")
+    router.process_message("user123", "chat123", False, "Normal/Private Chat", ".ping")
     assert len(wa_client.sent_messages) == 1
     response = wa_client.sent_messages[0]["message"]
     assert "🏓 Pong!" in response
@@ -52,7 +52,7 @@ def test_command_routing_ping(router, wa_client):
     assert "💾 Database: OK" in response
 
 def test_command_routing_help(router, wa_client):
-    router.process_message("user123", "chat123", False, ".help")
+    router.process_message("user123", "chat123", False, "Normal/Private Chat", ".help")
     assert len(wa_client.sent_messages) == 1
     response = wa_client.sent_messages[0]["message"]
     assert "Available Commands" in response
@@ -60,11 +60,11 @@ def test_command_routing_help(router, wa_client):
     assert ".help" in response
 
 def test_command_routing_unknown(router, wa_client):
-    router.process_message("user123", "chat123", False, ".unknown")
+    router.process_message("user123", "chat123", False, "Normal/Private Chat", ".unknown")
     assert len(wa_client.sent_messages) == 0
 
 def test_user_group_creation(router, db):
-    router.process_message("user_test", "group_test", True, ".ping")
+    router.process_message("user_test", "group_test", True, "WhatsApp Group", ".ping")
     # Verify user and group exist in DB
     assert "user_test" in db.users
     assert "group_test" in db.groups
@@ -76,19 +76,19 @@ def test_command_routing_translate(router, wa_client, monkeypatch):
     router.translator = mock_translator
     
     # Test direct text
-    router.process_message("user", "chat", False, ".translate Bonjour")
+    router.process_message("user", "chat", False, "Normal/Private Chat", ".translate Bonjour")
     assert len(wa_client.sent_messages) == 1
     assert wa_client.sent_messages[-1]["message"] == "Translated!"
     mock_translator.translate.assert_called_with("Bonjour")
     
     # Test quoted text
-    router.process_message("user", "chat", False, ".translate", quoted_text="Merci")
+    router.process_message("user", "chat", False, "Normal/Private Chat", ".translate", quoted_text="Merci")
     assert len(wa_client.sent_messages) == 2
     assert wa_client.sent_messages[-1]["message"] == "Translated!"
     mock_translator.translate.assert_called_with("Merci")
     
     # Test empty request
-    router.process_message("user", "chat", False, ".translate")
+    router.process_message("user", "chat", False, "Normal/Private Chat", ".translate")
     assert len(wa_client.sent_messages) == 3
     assert "Usage: .translate" in wa_client.sent_messages[-1]["message"]
 
@@ -120,22 +120,27 @@ def test_command_routing_mute(router, wa_client):
     wa_client.delete_message = lambda row_testid: wa_client.sent_messages.append({"delete": row_testid})
 
     # Test valid mute
-    router.process_message("admin_user", "group_chat", True, ".mute @spam_user 5m", row_testid="test1")
+    router.process_message("admin_user", "group_chat", True, "WhatsApp Group", ".mute @spam_user 5m", row_testid="test1")
     assert "muted for 5m" in wa_client.sent_messages[-1]["message"]
     
     # Check mute manager
     assert router.mute_manager.is_muted("group_chat", "spam_user") is True
     
     # Test message deletion when muted
-    router.process_message("spam_user", "group_chat", True, "Hello!", row_testid="msg_to_delete")
+    router.process_message("spam_user", "group_chat", True, "WhatsApp Group", "Hello!", row_testid="msg_to_delete")
     assert {"delete": "msg_to_delete"} in wa_client.sent_messages
 
+    # Test spaces in target name
+    router.process_message("admin_user", "group_chat", True, "WhatsApp Group", ".mute @JOSHZY TECH 60s", row_testid="test_spaces")
+    assert "muted for 60s" in wa_client.sent_messages[-1]["message"]
+    assert router.mute_manager.is_muted("group_chat", "JOSHZY TECH") is True
+
     # Test invalid duration
-    router.process_message("admin_user", "group_chat", True, ".mute @john 2x")
+    router.process_message("admin_user", "group_chat", True, "WhatsApp Group", ".mute @john 2x")
     assert "Invalid duration" in wa_client.sent_messages[-1]["message"]
 
     # Test missing target
-    router.process_message("admin_user", "group_chat", True, ".mute 2m")
+    router.process_message("admin_user", "group_chat", True, "WhatsApp Group", ".mute 2m")
     assert "Usage: .mute @username" in wa_client.sent_messages[-1]["message"]
 
 def test_admin_permissions(router, wa_client):
@@ -143,17 +148,51 @@ def test_admin_permissions(router, wa_client):
 
     # Test sender not admin
     wa_client.is_admin = lambda chat_id, user_id: user_id == "bot"
-    router.process_message("normal_user", "group_chat", True, ".mute @john 1m")
+    router.process_message("normal_user", "group_chat", True, "WhatsApp Group", ".mute @john 1m")
     assert "must be a group admin" in wa_client.sent_messages[-1]["message"]
     assert router.mute_manager.is_muted("group_chat", "john") is False
 
     # Test bot not admin
     wa_client.is_admin = lambda chat_id, user_id: user_id != "bot"
-    router.process_message("admin_user", "group_chat", True, ".mute @john 1m")
+    router.process_message("admin_user", "group_chat", True, "WhatsApp Group", ".mute @john 1m")
     assert "Bot must be a group admin" in wa_client.sent_messages[-1]["message"]
     assert router.mute_manager.is_muted("group_chat", "john") is False
 
     # Test not group
     wa_client.is_admin = lambda chat_id, user_id: True
-    router.process_message("admin_user", "private_chat", False, ".mute @john 1m")
+    router.process_message("admin_user", "private_chat", False, "Normal/Private Chat", ".mute @john 1m")
     assert "only be used in a WhatsApp group" in wa_client.sent_messages[-1]["message"]
+
+def test_automatic_mute_enforcement(router, wa_client):
+    import time
+    wa_client.sent_messages = []
+    wa_client.is_admin = lambda chat_id, user_id: True
+    wa_client.delete_message = lambda row_testid: wa_client.sent_messages.append({"delete": row_testid})
+
+    # Mute the user for 1 second
+    router.process_message("admin", "group1", True, "WhatsApp Group", ".mute @target 1s")
+
+    # 1. Active muted sender -> message is deleted
+    router.process_message("target", "group1", True, "WhatsApp Group", "Hello", row_testid="msg1")
+    assert {"delete": "msg1"} in wa_client.sent_messages
+
+    # 2. Unmuted sender -> message is not deleted
+    router.process_message("innocent", "group1", True, "WhatsApp Group", "Hi", row_testid="msg2")
+    assert {"delete": "msg2"} not in wa_client.sent_messages
+
+    # 3. Expired mute -> message is not deleted
+    time.sleep(1.1)
+    router.process_message("target", "group1", True, "WhatsApp Group", "I am back", row_testid="msg3")
+    assert {"delete": "msg3"} not in wa_client.sent_messages
+
+def test_automatic_mute_enforcement_mismatch(router, wa_client):
+    wa_client.sent_messages = []
+    wa_client.is_admin = lambda chat_id, user_id: True
+    wa_client.delete_message = lambda row_testid: wa_client.sent_messages.append({"delete": row_testid})
+
+    # Admin mutes 'JOSHZY TECH'
+    router.process_message("admin", "group1", True, "WhatsApp Group", ".mute @JOSHZY TECH 10s")
+
+    # The incoming sender might have a tilde (unsaved contact) or different casing
+    router.process_message("~JOSHZY TECH", "group1", True, "WhatsApp Group", "Hello", row_testid="msg_with_tilde")
+    assert {"delete": "msg_with_tilde"} in wa_client.sent_messages

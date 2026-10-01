@@ -366,11 +366,21 @@ class WhatsAppClient:
                                             }
                                         }
                                         
-                                        let isGroup = false;
                                         let chatTitle = "Unknown Chat";
                                         let chatTitleEl = document.querySelector('#main header [data-testid="conversation-info-header-chat-title"]');
                                         if (chatTitleEl) {
                                             chatTitle = chatTitleEl.textContent || chatTitleEl.innerText;
+                                        }
+
+                                        let isGroup = false;
+                                        let groupHeader = document.querySelector('#main header [title="Group info"], #main header [aria-label="Group info"], #main header [data-testid="default-group"]');
+                                        let subtitleSpans = document.querySelectorAll('#main header span[title]');
+                                        let hasCommaSubtitle = Array.from(subtitleSpans).some(s => {
+                                            let t = s.getAttribute('title');
+                                            return t && t.includes(',') && !t.includes('online') && !t.includes('typing');
+                                        });
+                                        if (groupHeader || hasCommaSubtitle) {
+                                            isGroup = true;
                                         }
 
                                         let quotedText = "";
@@ -378,14 +388,23 @@ class WhatsAppClient:
                                         if (quotedEl) {
                                             quotedText = quotedEl.innerText || quotedEl.textContent || "";
                                         }
+
+                                        let mentions = [];
+                                        let mentionEls = container.querySelectorAll('.matched-mention, span[data-mention-jid], span[data-jid]');
+                                        mentionEls.forEach(el => {
+                                            let jid = el.getAttribute('data-mention-jid') || el.getAttribute('data-jid');
+                                            if (jid) mentions.push(jid);
+                                        });
                                         
                                         window.pythonMessageHandler({
                                             sender: senderId,
                                             chat_id: chatTitle,
                                             is_group: isGroup,
+                                            chat_type: isGroup ? "WhatsApp Group" : "Normal/Private Chat",
                                             text: text,
                                             quoted_text: quotedText.trim(),
-                                            row_testid: "" 
+                                            row_testid: msgWrapper.getAttribute('data-testid') || "",
+                                            mentions: mentions
                                         });
                                     }
                                 }
@@ -426,11 +445,12 @@ class WhatsAppClient:
         sender = data.get("sender", "unknown")
         chat_id = data.get("chat_id", "unknown")
         is_group = data.get("is_group", False)
+        chat_type = data.get("chat_type", "Unknown")
         text = data.get("text", "")
         quoted_text = data.get("quoted_text", "")
         row_testid = data.get("row_testid", "")
         
-        if row_testid and self._loop and self._loop.is_running():
+        if row_testid and row_testid.startswith("list-item") and self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self.open_chat_row(row_testid), self._loop)
         
         if text:
@@ -439,12 +459,15 @@ class WhatsAppClient:
             logger.info(f"router invoked for message '{safe_text}' from {sender}")
             for handler in self.message_handlers:
                 try:
-                    handler(sender, chat_id, is_group, text, quoted_text, row_testid)
+                    handler(sender, chat_id, is_group, chat_type, text, quoted_text, row_testid)
                 except TypeError:
                     try:
-                        handler(sender, chat_id, is_group, text, quoted_text)
+                        handler(sender, chat_id, is_group, text, quoted_text, row_testid)
                     except TypeError:
-                        handler(sender, chat_id, is_group, text)
+                        try:
+                            handler(sender, chat_id, is_group, text, quoted_text)
+                        except TypeError:
+                            handler(sender, chat_id, is_group, text)
 
     def delete_message(self, row_testid: str):
         if self._loop and self._loop.is_running():
@@ -458,13 +481,16 @@ class WhatsAppClient:
             chevron = msg_locator.locator('[data-testid="down-context"]')
             await chevron.click()
             
-            delete_btn = self.page.locator('div[role="button"][aria-label="Delete message"]')
+            # The dropdown item might be an li or div
+            delete_btn = self.page.locator('li:has-text("Delete message"), li:has-text("Delete"), div[role="button"][aria-label="Delete message"], div[role="button"][aria-label="Delete"]').first
             await delete_btn.click()
             
-            delete_for_everyone = self.page.locator('div[role="button"]:has-text("Delete for everyone")')
+            # The modal buttons might be <button> tags or div[role="button"]
+            delete_for_everyone = self.page.locator('button:has-text("Delete for everyone"), div[role="button"]:has-text("Delete for everyone")').first
             await delete_for_everyone.click()
             
-            ok_btn = self.page.locator('div[role="button"]:has-text("OK")')
+            # Sometimes a confirmation "OK" is needed
+            ok_btn = self.page.locator('button:has-text("OK"), div[role="button"]:has-text("OK")').first
             if await ok_btn.is_visible(timeout=500):
                 await ok_btn.click()
         except Exception as e:
@@ -535,6 +561,18 @@ class WhatsAppClient:
         except KeyboardInterrupt:
             logger.info("WhatsApp client stopped.")
 
+    async def get_status_dict(self):
+        status = {"authenticated": False, "qr": None}
+        if getattr(self, 'page', None) is None:
+            return status
+        try:
+            if await self.page.locator('div#pane-side').count() > 0:
+                status["authenticated"] = True
+            elif await self.page.locator('div[data-ref] canvas, [data-testid="qrcode"]').count() > 0:
+                status["qr"] = await self.page.evaluate('document.querySelector("canvas").toDataURL()')
+        except Exception:
+            pass
+        return status
 
 
 

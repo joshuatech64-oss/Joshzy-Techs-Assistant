@@ -21,7 +21,7 @@ class CommandRouter:
             ".unmute": self.cmd_unmute,
         }
 
-    def process_message(self, sender_id: str, chat_id: str, is_group: bool, message: str, quoted_text: str = None, row_testid: str = None):
+    def process_message(self, sender_id: str, chat_id: str, is_group: bool, chat_type: str, message: str, quoted_text: str = None, row_testid: str = None):
         self.db.add_user(sender_id)
         if is_group:
             self.db.add_group(chat_id)
@@ -39,9 +39,9 @@ class CommandRouter:
         command = msg.split(" ")[0].lower()
 
         if command in self.commands:
-            self.commands[command](sender_id, chat_id, is_group, msg, quoted_text)
+            self.commands[command](sender_id, chat_id, is_group, chat_type, msg, quoted_text)
 
-    def cmd_ping(self, sender_id: str, chat_id: str, is_group: bool, message: str, quoted_text: str = None):
+    def cmd_ping(self, sender_id: str, chat_id: str, is_group: bool, chat_type: str, message: str, quoted_text: str = None):
         start_time = time.time()
         db_ok = self.db.ping()
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -50,11 +50,11 @@ class CommandRouter:
         response = f"🏓 Pong!\n\n🟢 Bot: Online\n⚡ Response: {elapsed_ms}ms\n💾 Database: {db_status}"
         self.wa_client.send_message(chat_id, response)
 
-    def cmd_help(self, sender_id: str, chat_id: str, is_group: bool, message: str, quoted_text: str = None):
+    def cmd_help(self, sender_id: str, chat_id: str, is_group: bool, chat_type: str, message: str, quoted_text: str = None):
         response = "Available Commands:\n.ping - Check bot status\n.help - Show this message\n.spotify - Manage Spotify connection\n.translate - Translate text to English"
         self.wa_client.send_message(chat_id, response)
 
-    def cmd_spotify(self, sender_id: str, chat_id: str, is_group: bool, message: str, quoted_text: str = None):
+    def cmd_spotify(self, sender_id: str, chat_id: str, is_group: bool, chat_type: str, message: str, quoted_text: str = None):
         parts = message.split(" ")
         subcmd = parts[1].lower() if len(parts) > 1 else None
 
@@ -80,7 +80,7 @@ class CommandRouter:
                 response = "🎵 Spotify\n🔴 Not connected\n\nUse .spotify connect to connect your Spotify account."
             self.wa_client.send_message(chat_id, response)
 
-    def cmd_translate(self, sender_id: str, chat_id: str, is_group: bool, message: str, quoted_text: str = None):
+    def cmd_translate(self, sender_id: str, chat_id: str, is_group: bool, chat_type: str, message: str, quoted_text: str = None):
         text_to_translate = message[len(".translate"):].strip()
         
         if not text_to_translate and quoted_text:
@@ -93,18 +93,19 @@ class CommandRouter:
         response = self.translator.translate(text_to_translate)
         self.wa_client.send_message(chat_id, response)
 
-    def cmd_mute(self, sender_id: str, chat_id: str, is_group: bool, message: str, quoted_text: str = None):
+    def cmd_mute(self, sender_id: str, chat_id: str, is_group: bool, chat_type: str, message: str, quoted_text: str = None):
         if not is_group:
             self.wa_client.send_message(chat_id, "❌ .mute can only be used in a WhatsApp group.")
             return
 
-        parts = message.split()
-        if len(parts) != 3 or not parts[1].startswith("@"):
+        import re
+        match = re.match(r"^\.mute\s+@(.+?)\s+(\S+)$", message, re.IGNORECASE)
+        if not match:
             self.wa_client.send_message(chat_id, "Usage: .mute @username <duration>\nExample: .mute @john 2m")
             return
 
-        target = parts[1][1:] # remove @
-        duration_str = parts[2].lower()
+        target = match.group(1).strip()
+        duration_str = match.group(2).lower()
 
         if target == sender_id or target.lower() == "bot":
             self.wa_client.send_message(chat_id, "❌ Cannot mute this user.")
@@ -133,17 +134,18 @@ class CommandRouter:
         self.mute_manager.mute(chat_id, target, duration_seconds)
         self.wa_client.send_message(chat_id, f"✅ @{target} has been muted for {duration_str}.")
 
-    def cmd_unmute(self, sender_id: str, chat_id: str, is_group: bool, message: str, quoted_text: str = None):
+    def cmd_unmute(self, sender_id: str, chat_id: str, is_group: bool, chat_type: str, message: str, quoted_text: str = None):
         if not is_group:
             self.wa_client.send_message(chat_id, "❌ .unmute can only be used in a WhatsApp group.")
             return
 
-        parts = message.split()
-        if len(parts) != 2 or not parts[1].startswith("@"):
+        import re
+        match = re.match(r"^\.unmute\s+@(.+)$", message, re.IGNORECASE)
+        if not match:
             self.wa_client.send_message(chat_id, "Usage: .unmute @username\nExample: .unmute @john")
             return
 
-        target = parts[1][1:] # remove @
+        target = match.group(1).strip()
 
         # Check admin
         if not self.wa_client.is_admin(chat_id, sender_id):
