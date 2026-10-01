@@ -214,6 +214,11 @@ class WhatsAppClient:
                 try:
                     await self.page.wait_for_selector('div#pane-side', timeout=0)
                     logger.info("Successfully authenticated to WhatsApp Web! (Background detected)")
+                    
+                    # Install listener ONLY AFTER #pane-side exists to prevent processing 
+                    # the massive initial historical message sync and causing OOM on Render
+                    await self._inject_message_listener()
+                    
                     if is_headless:
                         # Yield to event loop to ensure DOM stabilizes before zipping
                         await asyncio.sleep(5)
@@ -221,11 +226,10 @@ class WhatsAppClient:
                 except Exception as ex:
                     logger.error(f"Background auth detection failed: {ex}")
             
-            asyncio.create_task(_wait_for_auth_and_save())
-                
             # Listen to incoming messages via DOM MutationObserver
+            # Expose the function immediately, but inject JS only after auth
             await self.page.expose_function("pythonMessageHandler", self._handle_js_message)
-            await self._inject_message_listener()
+            asyncio.create_task(_wait_for_auth_and_save())
             
             # Keep event loop running
             while True:
