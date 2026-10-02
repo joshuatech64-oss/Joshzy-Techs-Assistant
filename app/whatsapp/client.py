@@ -123,7 +123,10 @@ class WhatsAppClient:
                     "--disable-features=IsolateOrigins,site-per-process",
                     "--disable-sync",
                     "--disable-translate",
-                    "--disable-default-apps"
+                    "--disable-default-apps",
+                    # Strict process limits for low-memory instances:
+                    "--renderer-process-limit=1",
+                    "--process-per-site"
                 ])
                 # Restore persisted session from Supabase before launching browser
                 self._restore_session_from_supabase()
