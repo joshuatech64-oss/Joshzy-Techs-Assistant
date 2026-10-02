@@ -153,13 +153,20 @@ class WhatsAppClient:
             await self.page.add_init_script("Object.defineProperty(document, 'visibilityState', {get: () => 'visible'}); Object.defineProperty(document, 'hidden', {get: () => false}); Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
             
             logger.info("Browser context created...")
-            # Start the state machine loop for the dashboard and listener
+            
             self._startup_state = "bootstrapping"
             self._qr_data = None
             self._is_authenticated = False
             
-            # Expose the function immediately, but inject JS only after auth
+            # Expose the function before navigation to ensure it's available
             await self.page.expose_function("pythonMessageHandler", self._handle_js_message)
+            
+            logger.info("Opening WhatsApp Web...")
+            # Navigate asynchronously so the state machine can start polling immediately
+            asyncio.create_task(self.page.goto("https://web.whatsapp.com/"))
+            logger.info("WhatsApp Web navigation started...")
+            
+            # Start the state machine loop for the dashboard and listener
             
             while True:
                 try:
