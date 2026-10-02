@@ -117,7 +117,13 @@ class WhatsAppClient:
                     "--disable-software-rasterizer",
                     "--disable-extensions",
                     "--mute-audio",
-                    "--js-flags=--max-old-space-size=256"
+                    "--js-flags=--max-old-space-size=256",
+                    # Aggressive memory saving flags:
+                    "--disable-site-isolation-trials",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                    "--disable-sync",
+                    "--disable-translate",
+                    "--disable-default-apps"
                 ])
                 # Restore persisted session from Supabase before launching browser
                 self._restore_session_from_supabase()
@@ -151,6 +157,15 @@ class WhatsAppClient:
             
             # Spoof visibility so WhatsApp Web never thinks the tab is hidden or backgrounded
             await self.page.add_init_script("Object.defineProperty(document, 'visibilityState', {get: () => 'visible'}); Object.defineProperty(document, 'hidden', {get: () => false}); Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+            
+            # Intercept and block heavy/unnecessary resources (images, media) to save RAM during initial sync
+            async def intercept_route(route, request):
+                if request.resource_type in ["image", "media"]:
+                    await route.abort()
+                else:
+                    await route.continue_()
+                    
+            await self.page.route("**/*", intercept_route)
             
             logger.info("Browser context created...")
             
