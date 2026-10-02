@@ -153,86 +153,51 @@ class WhatsAppClient:
             await self.page.add_init_script("Object.defineProperty(document, 'visibilityState', {get: () => 'visible'}); Object.defineProperty(document, 'hidden', {get: () => false}); Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
             
             logger.info("Browser context created...")
-
-            logger.info(f"DIAGNOSTIC (Pre-goto): context_alive={self.context is not None}, page_alive={self.page is not None}")
-            if self.page:
-                try:
-                    logger.info(f"DIAGNOSTIC (Pre-goto URL): {self.page.url}")
-                except Exception as ex:
-                    logger.error(f"DIAGNOSTIC (Pre-goto URL error): {ex}")
-
-            logger.info("Opening WhatsApp Web...")
-            try:
-                await self.page.goto("https://web.whatsapp.com/")
-                logger.info("WhatsApp Web navigation completed...")
-                
-                try:
-                    logger.info(f"Current page URL: {self.page.url}")
-                    page_title = await self.page.title()
-                    logger.info(f"Page title: {page_title}")
-                    body_text = await self.page.locator("body").inner_text()
-                    logger.info(f"First 1000 characters of body: {body_text[:1000]}")
-                    app_exists = await self.page.locator("#app").count() > 0
-                    logger.info(f"Whether #app exists: {app_exists}")
-                    testid_count = await self.page.locator("[data-testid]").count()
-                    logger.info(f"Whether any [data-testid] elements exist: {testid_count > 0}")
-                    if testid_count > 0:
-                        testids = await self.page.evaluate('''() => {
-                            let ids = new Set();
-                            document.querySelectorAll("[data-testid]").forEach(el => ids.add(el.getAttribute("data-testid")));
-                            return Array.from(ids).slice(0, 30);
-                        }''')
-                        logger.info(f"The first 30 unique [data-testid] values currently present: {testids}")
-                    canvas_exists = await self.page.locator("canvas").count() > 0
-                    logger.info(f"Whether canvas exists: {canvas_exists}")
-                    pane_side_exists = await self.page.locator("#pane-side").count() > 0
-                    logger.info(f"Whether #pane-side exists: {pane_side_exists}")
-                except Exception as diag_err:
-                    logger.error(f"Diagnostic logging failed: {diag_err}")
-                    
-            except Exception as goto_err:
-                logger.error(f"DIAGNOSTIC (Goto Error/Timeout): {goto_err}")
-                if self.page:
-                    try:
-                        logger.info(f"DIAGNOSTIC (Post-timeout URL): {self.page.url}")
-                        page_title = await self.page.title()
-                        logger.info(f"DIAGNOSTIC (Post-timeout Title): {page_title}")
-                        fetch_check = await self.page.evaluate("fetch('https://web.whatsapp.com/').then(r => r.status).catch(e => e.toString())")
-                        logger.info(f"DIAGNOSTIC (Fetch Reachability): {fetch_check}")
-                    except Exception as diag_err:
-                        logger.error(f"DIAGNOSTIC (Post-timeout retrieval error): {diag_err}")
-                raise goto_err
+            # Start the state machine loop for the dashboard and listener
+            self._startup_state = "bootstrapping"
+            self._qr_data = None
+            self._is_authenticated = False
             
-            # Wait for either QR code or chat list
-            try:
-                await self.page.wait_for_selector('canvas, div#pane-side', timeout=5000)
-                logger.info("WhatsApp Web loaded. If QR code is present, please scan it.")
-            except Exception as e:
-                logger.error(f"Initial 5s wait for WhatsApp Web to load timed out: {e}")
-                
-            async def _wait_for_auth_and_save():
-                try:
-                    await self.page.wait_for_selector('div#pane-side', timeout=0)
-                    logger.info("Successfully authenticated to WhatsApp Web! (Background detected)")
-                    
-                    # Install listener ONLY AFTER #pane-side exists to prevent processing 
-                    # the massive initial historical message sync and causing OOM on Render
-                    await self._inject_message_listener()
-                    
-                    if is_headless:
-                        # Yield to event loop to ensure DOM stabilizes before zipping
-                        await asyncio.sleep(5)
-                    self._save_session_to_supabase()
-                except Exception as ex:
-                    logger.error(f"Background auth detection failed: {ex}")
-            
-            # Listen to incoming messages via DOM MutationObserver
             # Expose the function immediately, but inject JS only after auth
             await self.page.expose_function("pythonMessageHandler", self._handle_js_message)
-            asyncio.create_task(_wait_for_auth_and_save())
             
-            # Keep event loop running
             while True:
+                try:
+                    if self._is_authenticated:
+                        await asyncio.sleep(1)
+                        continue
+                        
+                    # Check for authenticated UI
+                    if await self.page.locator('div#pane-side').count() > 0:
+                        self._startup_state = "authenticated"
+                        self._is_authenticated = True
+                        self._qr_data = None
+                        logger.info("Successfully authenticated to WhatsApp Web!")
+                        
+                        # INJECT THE LISTENER ONLY AFTER AUTHENTICATED CHAT UI EXISTS
+                        await self._inject_message_listener()
+                        
+                        if is_headless:
+                            # Yield to event loop to ensure DOM stabilizes before zipping
+                            await asyncio.sleep(5)
+                        self._save_session_to_supabase()
+                        continue
+                        
+                    # Check for QR
+                    elif await self.page.locator('div[data-ref] canvas, [data-testid="qrcode"]').count() > 0:
+                        if self._startup_state != "qr_available":
+                            logger.info("WhatsApp Web loaded. QR code is present, please scan it.")
+                        self._startup_state = "qr_available"
+                        self._qr_data = await self.page.evaluate('document.querySelector("canvas").toDataURL()')
+                    
+                    else:
+                        self._startup_state = "bootstrapping"
+                        self._qr_data = None
+                        
+                except Exception as ex:
+                    # Ignore normal page navigation/eval errors while bootstrapping
+                    pass
+                
                 await asyncio.sleep(1)
                 
         except Exception as e:
@@ -566,17 +531,11 @@ class WhatsAppClient:
             logger.info("WhatsApp client stopped.")
 
     async def get_status_dict(self):
-        status = {"authenticated": False, "qr": None}
-        if getattr(self, 'page', None) is None:
-            return status
-        try:
-            if await self.page.locator('div#pane-side').count() > 0:
-                status["authenticated"] = True
-            elif await self.page.locator('div[data-ref] canvas, [data-testid="qrcode"]').count() > 0:
-                status["qr"] = await self.page.evaluate('document.querySelector("canvas").toDataURL()')
-        except Exception:
-            pass
-        return status
+        return {
+            "authenticated": getattr(self, '_is_authenticated', False),
+            "qr": getattr(self, '_qr_data', None),
+            "state": getattr(self, '_startup_state', "initializing")
+        }
 
 
 
