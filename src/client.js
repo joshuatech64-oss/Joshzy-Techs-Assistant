@@ -233,6 +233,8 @@ let quotedText = "";
                 message: innerMessage
             };
 
+            await this.send_message(m.key.remoteJid, "⏳ Extracting view once message, please wait...");
+
             const buffer = await downloadMediaMessage(
                 fakeM,
                 'buffer',
