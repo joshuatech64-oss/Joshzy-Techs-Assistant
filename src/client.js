@@ -202,9 +202,25 @@ let quotedText = "";
                 return;
             }
 
-            const viewOnceMessage = quotedMsg.viewOnceMessageV2 || quotedMsg.viewOnceMessageV2Extension || quotedMsg.viewOnceMessage;
-            if (!viewOnceMessage) {
-                await this.send_message(m.key.remoteJid, "❌ The replied message is not a view once message.");
+            let innerMessage = quotedMsg;
+            if (quotedMsg.viewOnceMessageV2) {
+                innerMessage = quotedMsg.viewOnceMessageV2.message;
+            } else if (quotedMsg.viewOnceMessageV2Extension) {
+                innerMessage = quotedMsg.viewOnceMessageV2Extension.message;
+            } else if (quotedMsg.viewOnceMessage) {
+                innerMessage = quotedMsg.viewOnceMessage.message;
+            }
+
+            const isViewOnce = 
+                !!quotedMsg.viewOnceMessageV2 || 
+                !!quotedMsg.viewOnceMessageV2Extension || 
+                !!quotedMsg.viewOnceMessage ||
+                innerMessage?.imageMessage?.viewOnce ||
+                innerMessage?.videoMessage?.viewOnce ||
+                innerMessage?.audioMessage?.viewOnce;
+
+            if (!isViewOnce) {
+                await this.send_message(m.key.remoteJid, "❌ The replied message is not a view once message. Debug: " + Object.keys(quotedMsg).join(', '));
                 return;
             }
 
@@ -214,7 +230,7 @@ let quotedText = "";
                     id: m.message.extendedTextMessage.contextInfo.stanzaId,
                     participant: m.message.extendedTextMessage.contextInfo.participant
                 } : m.key,
-                message: viewOnceMessage.message
+                message: innerMessage
             };
 
             const buffer = await downloadMediaMessage(
@@ -224,11 +240,11 @@ let quotedText = "";
                 { logger: pino({ level: 'silent' }), reuploadRequest: this.sock.updateMediaMessage }
             );
 
-            const isImage = !!viewOnceMessage.message.imageMessage;
-            const isVideo = !!viewOnceMessage.message.videoMessage;
-            const isAudio = !!viewOnceMessage.message.audioMessage;
+            const isImage = !!innerMessage.imageMessage;
+            const isVideo = !!innerMessage.videoMessage;
+            const isAudio = !!innerMessage.audioMessage;
             
-            let caption = viewOnceMessage.message?.imageMessage?.caption || viewOnceMessage.message?.videoMessage?.caption || "";
+            let caption = innerMessage.imageMessage?.caption || innerMessage.videoMessage?.caption || "";
 
             let targetJid = senderId;
             if (!targetJid.includes('@')) {
