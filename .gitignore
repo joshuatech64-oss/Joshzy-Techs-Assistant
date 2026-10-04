@@ -5,3 +5,6 @@ data/
 sessions/
 .pytest_cache/
 test_sessions/
+
+node_modules/
+scratch/

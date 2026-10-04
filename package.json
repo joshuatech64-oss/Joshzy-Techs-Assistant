@@ -1,0 +1,43 @@
+{
+  "name": "joshzy-tech-assistant",
+  "version": "1.0.0",
+  "description": "This is a foundation for a WhatsApp Web-based music bot.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "jest",
+    "start": "node src/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joshuatech64-oss/Joshzy-Techs-Assistant.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/joshuatech64-oss/Joshzy-Techs-Assistant/issues"
+  },
+  "homepage": "https://github.com/joshuatech64-oss/Joshzy-Techs-Assistant#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.2",
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "adm-zip": "^0.6.1",
+    "axios": "^1.20.0",
+    "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "express-session": "^1.19.0",
+    "jsonwebtoken": "^9.0.3",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "yargs": "^18.2.0"
+  },
+  "devDependencies": {
+    "jest": "^30.5.2",
+    "supertest": "^7.3.1"
+  }
+}
