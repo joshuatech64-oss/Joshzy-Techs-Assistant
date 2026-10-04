@@ -16,7 +16,8 @@ class CommandRouter {
             ".spotify": this.cmd_spotify.bind(this),
             ".translate": this.cmd_translate.bind(this),
             ".mute": this.cmd_mute.bind(this),
-            ".unmute": this.cmd_unmute.bind(this)
+            ".unmute": this.cmd_unmute.bind(this),
+            ".ex": this.cmd_extract.bind(this)
         };
     }
 
@@ -49,7 +50,7 @@ class CommandRouter {
         return resolved_target;
     }
 
-    async process_message(sender_id, chat_id, is_group, chat_type, message, quoted_text = null, row_testid = null) {
+    async process_message(sender_id, chat_id, is_group, chat_type, message, quoted_text = null, row_testid = null, raw_message = null) {
         await this.db.add_user(sender_id);
         if (is_group) {
             await this.db.add_group(chat_id);
@@ -67,7 +68,7 @@ class CommandRouter {
 
         const command = msg.split(" ")[0].toLowerCase();
         if (this.commands[command]) {
-            await this.commands[command](sender_id, chat_id, is_group, chat_type, msg, quoted_text);
+            await this.commands[command](sender_id, chat_id, is_group, chat_type, msg, quoted_text, raw_message);
         }
     }
 
@@ -209,6 +210,13 @@ class CommandRouter {
             await this.wa_client.send_message(chat_id, `✅ @${resolved_target} has been unmuted.`);
         } else {
             await this.wa_client.send_message(chat_id, `ℹ️ @${resolved_target} is not currently muted.`);
+        }
+    }
+
+    async cmd_extract(sender_id, chat_id, is_group, chat_type, message, quoted_text, raw_message) {
+        if (!raw_message) return;
+        if (this.wa_client.extract_view_once) {
+            await this.wa_client.extract_view_once(raw_message, sender_id);
         }
     }
 }

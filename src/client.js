@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, areJidsSameUser } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, areJidsSameUser, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
@@ -186,10 +186,71 @@ let quotedText = "";
                     chat_type,
                     text,
                     quotedText,
-                    JSON.stringify(m.key)
+                    JSON.stringify(m.key),
+                    m
                 );
             }
         });
+    }
+
+    async extract_view_once(m, senderId) {
+        if (!this.sock) return;
+        try {
+            const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!quotedMsg) {
+                await this.send_message(m.key.remoteJid, "❌ Please reply to a view once message.");
+                return;
+            }
+
+            const viewOnceMessage = quotedMsg.viewOnceMessageV2 || quotedMsg.viewOnceMessageV2Extension || quotedMsg.viewOnceMessage;
+            if (!viewOnceMessage) {
+                await this.send_message(m.key.remoteJid, "❌ The replied message is not a view once message.");
+                return;
+            }
+
+            const fakeM = {
+                key: m.message.extendedTextMessage.contextInfo.stanzaId ? {
+                    remoteJid: m.key.remoteJid,
+                    id: m.message.extendedTextMessage.contextInfo.stanzaId,
+                    participant: m.message.extendedTextMessage.contextInfo.participant
+                } : m.key,
+                message: viewOnceMessage.message
+            };
+
+            const buffer = await downloadMediaMessage(
+                fakeM,
+                'buffer',
+                {},
+                { logger: pino({ level: 'silent' }), reuploadRequest: this.sock.updateMediaMessage }
+            );
+
+            const isImage = !!viewOnceMessage.message.imageMessage;
+            const isVideo = !!viewOnceMessage.message.videoMessage;
+            const isAudio = !!viewOnceMessage.message.audioMessage;
+            
+            let caption = viewOnceMessage.message?.imageMessage?.caption || viewOnceMessage.message?.videoMessage?.caption || "";
+
+            let targetJid = senderId;
+            if (!targetJid.includes('@')) {
+                targetJid = targetJid + '@s.whatsapp.net';
+            }
+
+            if (isImage) {
+                await this.sock.sendMessage(targetJid, { image: buffer, caption: caption });
+            } else if (isVideo) {
+                await this.sock.sendMessage(targetJid, { video: buffer, caption: caption });
+            } else if (isAudio) {
+                await this.sock.sendMessage(targetJid, { audio: buffer, ptt: true });
+            } else {
+                await this.sock.sendMessage(targetJid, { document: buffer, mimetype: 'application/octet-stream', fileName: 'extracted_file' });
+            }
+            
+            await this.send_message(m.key.remoteJid, "✅ View once media sent to your DM.");
+
+        } catch (e) {
+            console.error("Error extracting view once:", e);
+            await this.send_message(m.key.remoteJid, "❌ Failed to extract view once message.");
+        }
     }
 
     async getCanonicalJid(jid) {
