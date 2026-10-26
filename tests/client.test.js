@@ -7,6 +7,13 @@ jest.mock('@whiskeysockets/baileys', () => {
         useMultiFileAuthState: jest.fn().mockResolvedValue({ state: {}, saveCreds: jest.fn() }),
         DisconnectReason: {},
         downloadMediaMessage: jest.fn().mockResolvedValue(Buffer.from('fake-media')),
+        jidNormalizedUser: (jid) => {
+            if (!jid) return jid;
+            const [user] = jid.split('@');
+            const cleanUser = user.split(':')[0];
+            const server = jid.includes('@lid') ? '@lid' : '@s.whatsapp.net';
+            return `${cleanUser}${server}`;
+        },
         default: jest.fn().mockReturnValue({
             ev: { on: jest.fn() }
         })
@@ -132,15 +139,15 @@ describe('WhatsAppClient', () => {
             client.send_message = jest.fn().mockResolvedValue({});
         });
 
-        test('should deliver media to original chat JID (m.key.remoteJid) when invoked from bot account without progress or success message', async () => {
+        test('should deliver media to authenticated bot own self-chat JID, not the source chat, when invoked from bot account in group', async () => {
             const rawMsg = {
-                key: { remoteJid: '1234567890@s.whatsapp.net', fromMe: true, id: 'msg123' },
+                key: { remoteJid: 'group123@g.us', fromMe: true, id: 'msg123' },
                 message: {
                     extendedTextMessage: {
                         text: '.ex',
                         contextInfo: {
                             stanzaId: 'quoted123',
-                            participant: '1234567890@s.whatsapp.net',
+                            participant: 'otheruser@s.whatsapp.net',
                             quotedMessage: {
                                 viewOnceMessageV2: {
                                     message: {
@@ -158,34 +165,40 @@ describe('WhatsAppClient', () => {
 
             await client.extract_view_once(rawMsg, 'bot');
 
-            // 1. Should send the image directly to m.key.remoteJid
+            // Bot's user.id is '184237655347304:9@s.whatsapp.net', normalized to '184237655347304@s.whatsapp.net'
             expect(client.sock.sendMessage).toHaveBeenCalledWith(
-                '1234567890@s.whatsapp.net',
+                '184237655347304@s.whatsapp.net',
                 expect.objectContaining({
                     image: Buffer.from('fake-media'),
                     caption: 'Secret pic'
                 })
             );
 
-            // 2. Should NOT send any progress or success message
+            // Should NOT send to the source chat group123@g.us
+            expect(client.sock.sendMessage).not.toHaveBeenCalledWith(
+                'group123@g.us',
+                expect.anything()
+            );
+
+            // Should NOT send any progress or success message
             expect(client.send_message).not.toHaveBeenCalled();
         });
 
-        test('should deliver media to group chat JID when bot invokes .ex in a group', async () => {
+        test('should deliver media to authenticated bot own self-chat JID when invoked in 1-on-1 private chat', async () => {
             const rawMsg = {
-                key: { remoteJid: 'group123@g.us', fromMe: true, id: 'msgGroup' },
+                key: { remoteJid: 'friend123@s.whatsapp.net', fromMe: true, id: 'msgPrivate' },
                 message: {
                     extendedTextMessage: {
                         text: '.ex',
                         contextInfo: {
-                            stanzaId: 'quotedGroup',
-                            participant: 'other@s.whatsapp.net',
+                            stanzaId: 'quotedPrivate',
+                            participant: 'friend123@s.whatsapp.net',
                             quotedMessage: {
                                 viewOnceMessageV2: {
                                     message: {
                                         imageMessage: {
                                             viewOnce: true,
-                                            caption: 'Group pic'
+                                            caption: 'Private pic'
                                         }
                                     }
                                 }
@@ -198,13 +211,51 @@ describe('WhatsAppClient', () => {
             await client.extract_view_once(rawMsg, 'bot');
 
             expect(client.sock.sendMessage).toHaveBeenCalledWith(
-                'group123@g.us',
+                '184237655347304@s.whatsapp.net',
                 expect.objectContaining({
                     image: Buffer.from('fake-media'),
-                    caption: 'Group pic'
+                    caption: 'Private pic'
                 })
             );
+            // Must NOT deliver to the friend's chat
+            expect(client.sock.sendMessage).not.toHaveBeenCalledWith(
+                'friend123@s.whatsapp.net',
+                expect.anything()
+            );
             expect(client.send_message).not.toHaveBeenCalled();
+        });
+
+        test('should fail with error if bot identity cannot be resolved and not fall back to source chat', async () => {
+            client.sock.user = null;
+            client.sock.authState = null;
+
+            const rawMsg = {
+                key: { remoteJid: 'group123@g.us', fromMe: true, id: 'msgNoAuth' },
+                message: {
+                    extendedTextMessage: {
+                        text: '.ex',
+                        contextInfo: {
+                            quotedMessage: {
+                                viewOnceMessageV2: {
+                                    message: {
+                                        imageMessage: { viewOnce: true }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            await client.extract_view_once(rawMsg, 'bot');
+
+            // Should NOT have sent media to group or anywhere
+            expect(client.sock.sendMessage).not.toHaveBeenCalled();
+            // Should report failure to source chat
+            expect(client.send_message).toHaveBeenCalledWith(
+                'group123@g.us',
+                '❌ Failed to extract view once message.'
+            );
         });
 
         test('should deliver media to external user JID when invoked from external account', async () => {

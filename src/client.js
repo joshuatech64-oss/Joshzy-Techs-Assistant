@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, areJidsSameUser, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, areJidsSameUser, downloadMediaMessage, jidNormalizedUser } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
@@ -246,9 +246,19 @@ let quotedText = "";
             
             let caption = innerMessage.imageMessage?.caption || innerMessage.videoMessage?.caption || "";
 
-            let targetJid = senderId === 'bot' ? m.key.remoteJid : senderId;
-            if (!targetJid.includes('@')) {
-                targetJid = targetJid + '@s.whatsapp.net';
+            let targetJid;
+            if (senderId === 'bot') {
+                const rawBotJid = this.sock.user?.id || this.sock.authState?.creds?.me?.id;
+                if (!rawBotJid) {
+                    throw new Error("Unable to resolve bot self-chat JID from socket identity");
+                }
+                const normalizedBotJid = jidNormalizedUser(rawBotJid);
+                targetJid = await this.getCanonicalJid(normalizedBotJid);
+            } else {
+                targetJid = senderId;
+                if (!targetJid.includes('@')) {
+                    targetJid = targetJid + '@s.whatsapp.net';
+                }
             }
 
             if (isImage) {
