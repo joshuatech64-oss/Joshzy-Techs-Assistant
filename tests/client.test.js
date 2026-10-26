@@ -6,6 +6,7 @@ jest.mock('@whiskeysockets/baileys', () => {
         },
         useMultiFileAuthState: jest.fn().mockResolvedValue({ state: {}, saveCreds: jest.fn() }),
         DisconnectReason: {},
+        downloadMediaMessage: jest.fn().mockResolvedValue(Buffer.from('fake-media')),
         default: jest.fn().mockReturnValue({
             ev: { on: jest.fn() }
         })
@@ -123,5 +124,141 @@ describe('WhatsAppClient', () => {
             '',
             JSON.stringify(fakeMsg.messages[0].key)
         );
+    });
+
+    describe('extract_view_once', () => {
+        beforeEach(() => {
+            client.sock.sendMessage = jest.fn().mockResolvedValue({});
+            client.send_message = jest.fn().mockResolvedValue({});
+        });
+
+        test('should deliver media to resolved bot JID when invoked from bot account without progress or success message', async () => {
+            const rawMsg = {
+                key: { remoteJid: 'group123@g.us', fromMe: true, id: 'msg123' },
+                message: {
+                    extendedTextMessage: {
+                        text: '.ex',
+                        contextInfo: {
+                            stanzaId: 'quoted123',
+                            participant: 'sender123@s.whatsapp.net',
+                            quotedMessage: {
+                                viewOnceMessageV2: {
+                                    message: {
+                                        imageMessage: {
+                                            viewOnce: true,
+                                            caption: 'Secret pic'
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            await client.extract_view_once(rawMsg, 'bot');
+
+            // 1. Should send the image to canonical bot JID ('184237655347304:9@s.whatsapp.net' -> '184237655347304:9@s.whatsapp.net')
+            expect(client.sock.sendMessage).toHaveBeenCalledWith(
+                '184237655347304:9@s.whatsapp.net',
+                expect.objectContaining({
+                    image: Buffer.from('fake-media'),
+                    caption: 'Secret pic'
+                })
+            );
+
+            // 2. Should NOT send any progress or success message
+            expect(client.send_message).not.toHaveBeenCalled();
+        });
+
+        test('should deliver media to external user JID when invoked from external account', async () => {
+            const rawMsg = {
+                key: { remoteJid: 'group123@g.us', fromMe: false, id: 'msg456' },
+                message: {
+                    extendedTextMessage: {
+                        text: '.ex',
+                        contextInfo: {
+                            stanzaId: 'quoted456',
+                            participant: 'otheruser@s.whatsapp.net',
+                            quotedMessage: {
+                                viewOnceMessage: {
+                                    message: {
+                                        videoMessage: {
+                                            viewOnce: true,
+                                            caption: 'Secret video'
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            await client.extract_view_once(rawMsg, '1234567890');
+
+            expect(client.sock.sendMessage).toHaveBeenCalledWith(
+                '1234567890@s.whatsapp.net',
+                expect.objectContaining({
+                    video: Buffer.from('fake-media'),
+                    caption: 'Secret video'
+                })
+            );
+            expect(client.send_message).not.toHaveBeenCalled();
+        });
+
+        test('should report genuine error if replied message is not view once', async () => {
+            const rawMsg = {
+                key: { remoteJid: 'chat123@s.whatsapp.net', fromMe: true },
+                message: {
+                    extendedTextMessage: {
+                        text: '.ex',
+                        contextInfo: {
+                            quotedMessage: {
+                                conversation: 'Just a regular message'
+                            }
+                        }
+                    }
+                }
+            };
+
+            await client.extract_view_once(rawMsg, 'bot');
+
+            expect(client.sock.sendMessage).not.toHaveBeenCalled();
+            expect(client.send_message).toHaveBeenCalledWith(
+                'chat123@s.whatsapp.net',
+                expect.stringContaining('❌ The replied message is not a view once message')
+            );
+        });
+
+        test('should report genuine error if extraction/download fails', async () => {
+            const { downloadMediaMessage } = require('@whiskeysockets/baileys');
+            downloadMediaMessage.mockRejectedValueOnce(new Error('Download timeout'));
+
+            const rawMsg = {
+                key: { remoteJid: 'group123@g.us', fromMe: true },
+                message: {
+                    extendedTextMessage: {
+                        text: '.ex',
+                        contextInfo: {
+                            quotedMessage: {
+                                viewOnceMessageV2: {
+                                    message: {
+                                        imageMessage: { viewOnce: true }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            await client.extract_view_once(rawMsg, 'bot');
+
+            expect(client.send_message).toHaveBeenCalledWith(
+                'group123@g.us',
+                '❌ Failed to extract view once message.'
+            );
+        });
     });
 });
