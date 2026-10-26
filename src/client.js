@@ -246,12 +246,7 @@ let quotedText = "";
             
             let caption = innerMessage.imageMessage?.caption || innerMessage.videoMessage?.caption || "";
 
-            let targetJid = senderId;
-            if (targetJid === 'bot') {
-                const botJid = this.sock.user?.id || this.sock.authState?.creds?.me?.id;
-                targetJid = botJid ? await this.getCanonicalJid(botJid) : m.key.remoteJid;
-            }
-
+            let targetJid = senderId === 'bot' ? m.key.remoteJid : senderId;
             if (!targetJid.includes('@')) {
                 targetJid = targetJid + '@s.whatsapp.net';
             }

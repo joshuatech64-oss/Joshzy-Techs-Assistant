@@ -132,15 +132,15 @@ describe('WhatsAppClient', () => {
             client.send_message = jest.fn().mockResolvedValue({});
         });
 
-        test('should deliver media to resolved bot JID when invoked from bot account without progress or success message', async () => {
+        test('should deliver media to original chat JID (m.key.remoteJid) when invoked from bot account without progress or success message', async () => {
             const rawMsg = {
-                key: { remoteJid: 'group123@g.us', fromMe: true, id: 'msg123' },
+                key: { remoteJid: '1234567890@s.whatsapp.net', fromMe: true, id: 'msg123' },
                 message: {
                     extendedTextMessage: {
                         text: '.ex',
                         contextInfo: {
                             stanzaId: 'quoted123',
-                            participant: 'sender123@s.whatsapp.net',
+                            participant: '1234567890@s.whatsapp.net',
                             quotedMessage: {
                                 viewOnceMessageV2: {
                                     message: {
@@ -158,9 +158,9 @@ describe('WhatsAppClient', () => {
 
             await client.extract_view_once(rawMsg, 'bot');
 
-            // 1. Should send the image to canonical bot JID ('184237655347304:9@s.whatsapp.net' -> '184237655347304:9@s.whatsapp.net')
+            // 1. Should send the image directly to m.key.remoteJid
             expect(client.sock.sendMessage).toHaveBeenCalledWith(
-                '184237655347304:9@s.whatsapp.net',
+                '1234567890@s.whatsapp.net',
                 expect.objectContaining({
                     image: Buffer.from('fake-media'),
                     caption: 'Secret pic'
@@ -168,6 +168,42 @@ describe('WhatsAppClient', () => {
             );
 
             // 2. Should NOT send any progress or success message
+            expect(client.send_message).not.toHaveBeenCalled();
+        });
+
+        test('should deliver media to group chat JID when bot invokes .ex in a group', async () => {
+            const rawMsg = {
+                key: { remoteJid: 'group123@g.us', fromMe: true, id: 'msgGroup' },
+                message: {
+                    extendedTextMessage: {
+                        text: '.ex',
+                        contextInfo: {
+                            stanzaId: 'quotedGroup',
+                            participant: 'other@s.whatsapp.net',
+                            quotedMessage: {
+                                viewOnceMessageV2: {
+                                    message: {
+                                        imageMessage: {
+                                            viewOnce: true,
+                                            caption: 'Group pic'
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            await client.extract_view_once(rawMsg, 'bot');
+
+            expect(client.sock.sendMessage).toHaveBeenCalledWith(
+                'group123@g.us',
+                expect.objectContaining({
+                    image: Buffer.from('fake-media'),
+                    caption: 'Group pic'
+                })
+            );
             expect(client.send_message).not.toHaveBeenCalled();
         });
 
