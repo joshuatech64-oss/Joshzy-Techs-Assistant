@@ -59,7 +59,6 @@ describe('TikTokDownloader', () => {
 
         test('marks isDocument to true when file size exceeds videoLimit', async () => {
             const testUrl = 'https://www.tiktok.com/@user/video/111111111';
-            const fakeFilePath = path.join(testDir, 'fake_large.mp4');
 
             downloader.downloadWithYtDlp = jest.fn().mockImplementation(async (url, outputPath) => {
                 // Write 3 MB (exceeds videoLimit of 2 MB, but within maxFileSize of 10 MB)
@@ -75,7 +74,55 @@ describe('TikTokDownloader', () => {
             expect(fs.existsSync(result.filePath)).toBe(false);
         });
 
-        test('throws error and cleans up file when size exceeds maxFileSize (100MB limit)', async () => {
+        test('default instance sets 100 MB videoLimit and 500 MB maxFileSize', () => {
+            const defaultDownloader = new TikTokDownloader({ downloadDir: testDir });
+            expect(defaultDownloader.videoLimit).toBe(100 * 1024 * 1024);
+            expect(defaultDownloader.maxFileSize).toBe(500 * 1024 * 1024);
+        });
+
+        test('sends as normal video when file is <= 100 MB and document when > 100 MB', async () => {
+            const defaultDownloader = new TikTokDownloader({ downloadDir: testDir });
+
+            // Case 1: 50 MB -> normal video (isDocument: false)
+            defaultDownloader.downloadWithYtDlp = jest.fn().mockImplementation(async (url, outputPath) => {
+                fs.writeFileSync(outputPath, Buffer.alloc(1024)); // small file for test
+                return { path: outputPath, source: 'yt-dlp' };
+            });
+            // Mock statSync to simulate 100 MB exactly
+            const realStatSync = fs.statSync;
+            jest.spyOn(fs, 'statSync').mockReturnValue({ size: 100 * 1024 * 1024 });
+
+            const normalResult = await defaultDownloader.download('https://www.tiktok.com/@user/video/100mb');
+            expect(normalResult.isDocument).toBe(false);
+            expect(normalResult.fileSize).toBe(100 * 1024 * 1024);
+            defaultDownloader.cleanup(normalResult.filePath);
+
+            // Case 2: 101 MB -> document (isDocument: true)
+            fs.statSync.mockReturnValue({ size: 101 * 1024 * 1024 });
+            const docResult = await defaultDownloader.download('https://www.tiktok.com/@user/video/101mb');
+            expect(docResult.isDocument).toBe(true);
+            expect(docResult.fileSize).toBe(101 * 1024 * 1024);
+            defaultDownloader.cleanup(docResult.filePath);
+
+            fs.statSync.mockRestore();
+        });
+
+        test('throws error and cleans up file when size exceeds 500 MB maximum limit', async () => {
+            const defaultDownloader = new TikTokDownloader({ downloadDir: testDir });
+            defaultDownloader.downloadWithYtDlp = jest.fn().mockImplementation(async (url, outputPath) => {
+                fs.writeFileSync(outputPath, Buffer.alloc(1024));
+                return { path: outputPath, source: 'yt-dlp' };
+            });
+
+            jest.spyOn(fs, 'statSync').mockReturnValue({ size: 501 * 1024 * 1024 });
+
+            await expect(defaultDownloader.download('https://www.tiktok.com/@user/video/501mb'))
+                .rejects.toThrow('The requested video is too large (501.0 MB). Maximum limit is 500 MB.');
+
+            fs.statSync.mockRestore();
+        });
+
+        test('throws error and cleans up file when size exceeds custom maxFileSize', async () => {
             const testUrl = 'https://www.tiktok.com/@user/video/222222222';
 
             downloader.downloadWithYtDlp = jest.fn().mockImplementation(async (url, outputPath) => {
@@ -97,6 +144,49 @@ describe('TikTokDownloader', () => {
 
             // Calling cleanup on non-existent file should not throw
             expect(() => downloader.cleanup(tempFile)).not.toThrow();
+        });
+
+        test('logs concise yt-dlp error before invoking fallback and cleans up partial file', async () => {
+            const testUrl = 'https://www.tiktok.com/@user/video/555555555';
+            const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+            downloader.downloadWithYtDlp = jest.fn().mockImplementation(async (url, outputPath) => {
+                // Simulate partial file write before failure
+                fs.writeFileSync(outputPath, 'partial corrupt content');
+                throw new Error('yt-dlp failed: HTTP Error 403: Forbidden');
+            });
+
+            downloader.downloadWithApiFallback = jest.fn().mockImplementation(async (url, outputPath) => {
+                // Verify partial file was cleaned up before fallback
+                expect(fs.existsSync(outputPath)).toBe(false);
+                fs.writeFileSync(outputPath, Buffer.alloc(1000));
+                return { path: outputPath, source: 'api', title: 'Fallback Video' };
+            });
+
+            const result = await downloader.download(testUrl);
+            expect(result.title).toBe('Fallback Video');
+            expect(consoleSpy).toHaveBeenCalledWith(
+                expect.stringContaining('[TikTokDownloader] yt-dlp attempt failed: yt-dlp failed: HTTP Error 403: Forbidden. Falling back to API...')
+            );
+
+            consoleSpy.mockRestore();
+            downloader.cleanup(result.filePath);
+        });
+
+        test('downloadWithYtDlp rejects and cleans up empty output files', async () => {
+            const outputPath = path.join(testDir, 'empty_test.mp4');
+            fs.writeFileSync(outputPath, Buffer.alloc(0));
+
+            const cp = require('child_process');
+            const spy = jest.spyOn(cp, 'execFile').mockImplementation((cmd, args, opts, cb) => {
+                cb(null, '', '');
+            });
+
+            await expect(downloader.downloadWithYtDlp('https://www.tiktok.com/@user/video/777', outputPath))
+                .rejects.toThrow('yt-dlp completed but output file was empty');
+
+            expect(fs.existsSync(outputPath)).toBe(false);
+            spy.mockRestore();
         });
     });
 });

@@ -1,13 +1,13 @@
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+const cp = require('child_process');
 
 class TikTokDownloader {
     constructor(options = {}) {
         this.downloadDir = options.downloadDir || path.join(process.cwd(), 'scratch', 'tiktok');
-        this.maxFileSize = options.maxFileSize || 100 * 1024 * 1024; // 100 MB max WhatsApp limit
-        this.videoLimit = options.videoLimit || 16 * 1024 * 1024; // 16 MB WhatsApp standard video limit
+        this.maxFileSize = options.maxFileSize || 500 * 1024 * 1024; // 500 MB maximum limit
+        this.videoLimit = options.videoLimit || 100 * 1024 * 1024; // 100 MB standard video limit (larger files sent as document)
         this.timeoutMs = options.timeoutMs || 45000;
         this.inFlightRequests = new Set();
         this.ytdlpBinary = options.ytdlpBinary || this._findYtDlpBinary();
@@ -64,13 +64,24 @@ class TikTokDownloader {
                 url
             ];
 
-            const child = execFile(this.ytdlpBinary, args, { timeout: this.timeoutMs }, (error, stdout, stderr) => {
+            cp.execFile(this.ytdlpBinary, args, { timeout: this.timeoutMs }, (error, stdout, stderr) => {
                 if (error) {
-                    return reject(new Error(`yt-dlp error: ${error.message} - ${stderr || stdout}`));
+                    this.cleanup(outputPath);
+                    const errMsg = (error.message || '').trim();
+                    const stdOutErr = (stderr || stdout || '').trim();
+                    return reject(new Error(`yt-dlp failed: ${errMsg}${stdOutErr ? ` | ${stdOutErr}` : ''}`));
                 }
+
                 if (!fs.existsSync(outputPath)) {
-                    return reject(new Error('yt-dlp did not produce output file'));
+                    return reject(new Error('yt-dlp completed but output file was not created'));
                 }
+
+                const stats = fs.statSync(outputPath);
+                if (stats.size === 0) {
+                    this.cleanup(outputPath);
+                    return reject(new Error('yt-dlp completed but output file was empty'));
+                }
+
                 resolve({ path: outputPath, source: 'yt-dlp' });
             });
         });
@@ -141,14 +152,21 @@ class TikTokDownloader {
             try {
                 result = await this.downloadWithYtDlp(url, outputPath);
             } catch (ytErr) {
-                // 2. Fall back cleanly if yt-dlp faces anti-bot IP block or fails
+                // Log concise, useful error from yt-dlp before falling back
+                const cleanError = ytErr?.message ? ytErr.message.replace(/[\r\n]+/g, ' ').trim() : 'Unknown error';
+                console.error(`[TikTokDownloader] yt-dlp attempt failed: ${cleanError}. Falling back to API...`);
+                
+                // Ensure any partial or corrupt file from yt-dlp is cleaned up
+                this.cleanup(outputPath);
+
+                // 2. Fall back if yt-dlp fails
                 result = await this.downloadWithApiFallback(url, outputPath);
             }
 
             const stats = fs.statSync(outputPath);
             if (stats.size > this.maxFileSize) {
                 this.cleanup(outputPath);
-                throw new Error(`The requested video is too large (${(stats.size / (1024 * 1024)).toFixed(1)} MB). WhatsApp maximum limit is 100 MB.`);
+                throw new Error(`The requested video is too large (${(stats.size / (1024 * 1024)).toFixed(1)} MB). Maximum limit is 500 MB.`);
             }
 
             return {
@@ -157,6 +175,9 @@ class TikTokDownloader {
                 title: result.title || '',
                 isDocument: stats.size > this.videoLimit
             };
+        } catch (err) {
+            this.cleanup(outputPath);
+            throw err;
         } finally {
             this.inFlightRequests.delete(url);
         }
