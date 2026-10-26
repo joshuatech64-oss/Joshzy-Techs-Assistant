@@ -8,3 +8,5 @@ test_sessions/
 
 node_modules/
 scratch/
+
+bin/yt-dlp.exe

@@ -277,6 +277,45 @@ let quotedText = "";
         }
     }
 
+    async send_tiktok_video(sourceChatId, senderId, filePath, isDocument, caption) {
+        if (!this.sock) return;
+        try {
+            let targetJid;
+            if (senderId === 'bot') {
+                const rawBotJid = this.sock.user?.id || this.sock.authState?.creds?.me?.id;
+                if (!rawBotJid) {
+                    throw new Error("Unable to resolve bot self-chat JID from socket identity");
+                }
+                const normalizedBotJid = jidNormalizedUser(rawBotJid);
+                targetJid = await this.getCanonicalJid(normalizedBotJid);
+            } else {
+                targetJid = senderId;
+                if (!targetJid.includes('@')) {
+                    targetJid = targetJid + '@s.whatsapp.net';
+                }
+            }
+
+            const videoBuffer = fs.readFileSync(filePath);
+            if (isDocument) {
+                await this.sock.sendMessage(targetJid, {
+                    document: videoBuffer,
+                    mimetype: 'video/mp4',
+                    fileName: 'tiktok_video.mp4',
+                    caption: caption || undefined
+                });
+            } else {
+                await this.sock.sendMessage(targetJid, {
+                    video: videoBuffer,
+                    caption: caption || undefined
+                });
+            }
+        } catch (e) {
+            console.error("Error sending TikTok video:", e);
+            await this.send_message(sourceChatId, `❌ Failed to send TikTok video: ${e.message}`);
+            throw e;
+        }
+    }
+
     async getCanonicalJid(jid) {
         if (!jid) return jid;
         let resolved = jid;

@@ -111,4 +111,57 @@ describe('CommandRouter', () => {
         await router.process_message('2349167462468', 'chat1@g.us', true, 'Group', 'Hello', null, '{"fake":"key"}');
         expect(mockWaClient.delete_message).not.toHaveBeenCalled();
     });
+
+    describe('.tt command', () => {
+        beforeEach(() => {
+            mockWaClient.send_tiktok_video = jest.fn().mockResolvedValue({});
+        });
+
+        test('reports error when no link or invalid link is provided', async () => {
+            await router.process_message('user1', 'chat1', false, 'Private', '.tt');
+            expect(mockWaClient.send_message).toHaveBeenCalledWith(
+                'chat1',
+                expect.stringContaining('❌ Please provide a valid TikTok video link.')
+            );
+            expect(mockWaClient.send_tiktok_video).not.toHaveBeenCalled();
+        });
+
+        test('downloads and sends video silently on success in group to user', async () => {
+            router.tiktok_downloader.resolveRedirect = jest.fn().mockResolvedValue('https://www.tiktok.com/@user/video/123456');
+            router.tiktok_downloader.download = jest.fn().mockResolvedValue({
+                filePath: '/tmp/test.mp4',
+                fileSize: 5000000,
+                title: 'Cool TikTok',
+                isDocument: false
+            });
+            router.tiktok_downloader.cleanup = jest.fn();
+
+            await router.process_message('user123', 'group1@g.us', true, 'Group', '.tt https://vm.tiktok.com/ZM8abc/');
+
+            expect(mockWaClient.send_tiktok_video).toHaveBeenCalledWith(
+                'group1@g.us',
+                'user123',
+                '/tmp/test.mp4',
+                false,
+                'Cool TikTok'
+            );
+            // Must be silent on success - no progress or success messages to group or anywhere
+            expect(mockWaClient.send_message).not.toHaveBeenCalled();
+            // Temporary file cleanup must be called
+            expect(router.tiktok_downloader.cleanup).toHaveBeenCalledWith('/tmp/test.mp4');
+        });
+
+        test('reports concise error to source chat when download fails', async () => {
+            router.tiktok_downloader.resolveRedirect = jest.fn().mockResolvedValue('https://www.tiktok.com/@user/video/123456');
+            router.tiktok_downloader.download = jest.fn().mockRejectedValue(new Error('Post is private or unavailable'));
+
+            await router.process_message('user123', 'group1@g.us', true, 'Group', '.tt https://www.tiktok.com/@user/video/123456');
+
+            expect(mockWaClient.send_message).toHaveBeenCalledWith(
+                'group1@g.us',
+                '❌ Post is private or unavailable'
+            );
+            expect(mockWaClient.send_tiktok_video).not.toHaveBeenCalled();
+        });
+    });
 });

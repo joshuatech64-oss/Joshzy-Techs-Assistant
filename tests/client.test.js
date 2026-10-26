@@ -19,6 +19,8 @@ jest.mock('@whiskeysockets/baileys', () => {
         })
     };
 });
+const path = require('path');
+const fs = require('fs');
 const WhatsAppClient = require('../src/client');
 
 describe('WhatsAppClient', () => {
@@ -345,6 +347,82 @@ describe('WhatsAppClient', () => {
             expect(client.send_message).toHaveBeenCalledWith(
                 'group123@g.us',
                 '❌ Failed to extract view once message.'
+            );
+        });
+    });
+
+    describe('send_tiktok_video', () => {
+        const dummyPath = path.join(process.cwd(), 'scratch', 'dummy.mp4');
+
+        beforeAll(() => {
+            if (!fs.existsSync(path.dirname(dummyPath))) {
+                fs.mkdirSync(path.dirname(dummyPath), { recursive: true });
+            }
+            fs.writeFileSync(dummyPath, Buffer.from('fake-video-content'));
+        });
+
+        afterAll(() => {
+            if (fs.existsSync(dummyPath)) {
+                fs.unlinkSync(dummyPath);
+            }
+        });
+
+        beforeEach(() => {
+            client.sock.sendMessage = jest.fn().mockResolvedValue({});
+            client.send_message = jest.fn().mockResolvedValue({});
+        });
+
+        test('should send regular video to external user personal DM', async () => {
+            await client.send_tiktok_video('group1@g.us', '2348012345678', dummyPath, false, 'Viral Video');
+
+            expect(client.sock.sendMessage).toHaveBeenCalledWith(
+                '2348012345678@s.whatsapp.net',
+                expect.objectContaining({
+                    video: Buffer.from('fake-video-content'),
+                    caption: 'Viral Video'
+                })
+            );
+            expect(client.send_message).not.toHaveBeenCalled();
+        });
+
+        test('should send document attachment when isDocument is true', async () => {
+            await client.send_tiktok_video('group1@g.us', '2348012345678', dummyPath, true, 'Large Video');
+
+            expect(client.sock.sendMessage).toHaveBeenCalledWith(
+                '2348012345678@s.whatsapp.net',
+                expect.objectContaining({
+                    document: Buffer.from('fake-video-content'),
+                    mimetype: 'video/mp4',
+                    fileName: 'tiktok_video.mp4',
+                    caption: 'Large Video'
+                })
+            );
+            expect(client.send_message).not.toHaveBeenCalled();
+        });
+
+        test('should send video to bot authenticated self-chat JID when sender is bot', async () => {
+            await client.send_tiktok_video('group1@g.us', 'bot', dummyPath, false, 'Bot Video');
+
+            expect(client.sock.sendMessage).toHaveBeenCalledWith(
+                '184237655347304@s.whatsapp.net',
+                expect.objectContaining({
+                    video: Buffer.from('fake-video-content'),
+                    caption: 'Bot Video'
+                })
+            );
+            expect(client.send_message).not.toHaveBeenCalled();
+        });
+
+        test('should report error to source chat when delivery fails', async () => {
+            client.sock.sendMessage.mockRejectedValueOnce(new Error('Socket disconnected'));
+
+            await expect(
+                client.send_tiktok_video('group1@g.us', '2348012345678', dummyPath, false, 'Fail Video')
+            ).rejects.toThrow('Socket disconnected');
+
+            expect(client.send_message).toHaveBeenCalledWith(
+                'group1@g.us',
+                expect.stringContaining('❌ Failed to send TikTok video: Socket disconnected')
             );
         });
     });

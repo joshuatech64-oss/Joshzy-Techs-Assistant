@@ -1,14 +1,16 @@
 const SpotifyAuth = require('./spotify');
 const Translator = require('./translator');
 const MuteManager = require('./mute');
+const TikTokDownloader = require('./tiktok');
 
 class CommandRouter {
-    constructor(db, wa_client) {
+    constructor(db, wa_client, tiktok_downloader = null) {
         this.db = db;
         this.wa_client = wa_client;
         this.spotify_auth = new SpotifyAuth(db);
         this.translator = new Translator();
         this.mute_manager = new MuteManager();
+        this.tiktok_downloader = tiktok_downloader || new TikTokDownloader();
         
         this.commands = {
             ".ping": this.cmd_ping.bind(this),
@@ -17,7 +19,8 @@ class CommandRouter {
             ".translate": this.cmd_translate.bind(this),
             ".mute": this.cmd_mute.bind(this),
             ".unmute": this.cmd_unmute.bind(this),
-            ".ex": this.cmd_extract.bind(this)
+            ".ex": this.cmd_extract.bind(this),
+            ".tt": this.cmd_tiktok.bind(this)
         };
     }
 
@@ -83,7 +86,7 @@ class CommandRouter {
     }
 
     async cmd_help(sender_id, chat_id, is_group, chat_type, message, quoted_text) {
-        const response = "Available Commands:\n.ping - Check bot status\n.help - Show this message\n.spotify - Manage Spotify connection\n.translate - Translate text to English";
+        const response = "Available Commands:\n.ping - Check bot status\n.help - Show this message\n.spotify - Manage Spotify connection\n.translate - Translate text to English\n.tt - Download TikTok video without watermark";
         await this.wa_client.send_message(chat_id, response);
     }
 
@@ -217,6 +220,40 @@ class CommandRouter {
         if (!raw_message) return;
         if (this.wa_client.extract_view_once) {
             await this.wa_client.extract_view_once(raw_message, sender_id);
+        }
+    }
+
+    async cmd_tiktok(sender_id, chat_id, is_group, chat_type, message, quoted_text, raw_message) {
+        const parts = message.split(/\s+/);
+        const candidateUrl = parts[1] || this.tiktok_downloader.extractUrl(message) || (quoted_text ? this.tiktok_downloader.extractUrl(quoted_text) : null);
+
+        if (!candidateUrl || !this.tiktok_downloader.isValidUrl(candidateUrl)) {
+            await this.wa_client.send_message(chat_id, "❌ Please provide a valid TikTok video link. Usage: .tt <TikTok URL>");
+            return;
+        }
+
+        let downloadResult = null;
+        try {
+            // Safely resolve redirect if short link
+            const targetUrl = await this.tiktok_downloader.resolveRedirect(candidateUrl);
+            downloadResult = await this.tiktok_downloader.download(targetUrl);
+
+            if (this.wa_client.send_tiktok_video) {
+                await this.wa_client.send_tiktok_video(
+                    chat_id,
+                    sender_id,
+                    downloadResult.filePath,
+                    downloadResult.isDocument,
+                    downloadResult.title
+                );
+            }
+        } catch (e) {
+            console.error("TikTok download error:", e);
+            await this.wa_client.send_message(chat_id, `❌ ${e.message || "Failed to download TikTok video."}`);
+        } finally {
+            if (downloadResult && downloadResult.filePath) {
+                this.tiktok_downloader.cleanup(downloadResult.filePath);
+            }
         }
     }
 }
